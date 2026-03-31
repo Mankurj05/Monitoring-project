@@ -1,0 +1,27 @@
+receivers:
+  otlp:
+    protocols:
+      grpc:
+      http:
+
+processors:
+  batch:
+    send_batch_size: 1024
+    timeout: 5s
+
+exporters:
+  logging:
+    verbosity: basic
+  otlphttp/custom_backend:
+    endpoint: http://monitoring-backend:8000/ingest/otlp
+    headers:
+      x-api-key: dev-monitor-key
+      x-tenant-id: default
+      x-project-id: demo
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [logging, otlphttp/custom_backend]

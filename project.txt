@@ -1,0 +1,219 @@
+Microservices Monitoring and Debugging Tool - Final Project Guide
+
+Project Name
+PulseMesh Monitor (MVP+)
+
+Project Objective
+Build a production-style monitoring and debugging platform for distributed systems.
+The project tracks requests across services, builds a service dependency graph, captures errors and latency, and provides a dashboard to troubleshoot failures.
+
+What Is Implemented
+1) Distributed tracing across services
+2) Service dependency graph
+3) Error tracking
+4) Latency metrics (avg and p95)
+5) Service metadata registry (environment, version, team)
+6) Auth + tenant/project isolation
+7) Language-agnostic OTLP ingestion endpoint
+8) Local no-Docker run mode (for restricted corporate machines)
+9) Docker mode (for normal machines with WSL2 enabled)
+
+============================================================
+TECH STACK
+============================================================
+Backend and APIs
+- Python 3.11
+- FastAPI
+- SQLAlchemy
+- Pydantic
+
+Tracing and Observability
+- OpenTelemetry SDK in demo services
+- OpenTelemetry Collector
+- OTLP protobuf ingestion endpoint in monitoring backend
+
+Storage
+- PostgreSQL (Docker mode)
+- SQLite (local no-Docker mode fallback)
+
+Frontend
+- React (Vite)
+- Recharts
+
+Containerization
+- Docker Compose
+
+Security and Multi-tenancy
+- API key header auth on ingestion and query APIs
+- Tenant/project scope headers for isolation
+
+============================================================
+PROJECT ARCHITECTURE (WHAT IS INSIDE THE PROJECT)
+============================================================
+Root layout
+- /services/gateway
+  Entrypoint service that receives user request and calls downstream services.
+- /services/orders
+  Business service that also calls payments.
+- /services/payments
+  Downstream service that may return success/failure.
+- /monitoring_backend
+  Core monitoring backend with ingest + query APIs and DB models.
+- /frontend
+  Dashboard UI for traces, service map, latency, and errors.
+- /otel-collector
+  Collector config for receiving OTLP and forwarding traces.
+- /scripts
+  Setup and run scripts for local environment.
+- /docker-compose.yml
+  Full stack orchestration in Docker mode.
+
+Logical flow
+1) User request enters gateway.
+2) Gateway calls orders and payments.
+3) Services emit telemetry to monitoring backend (custom span ingest) and can emit OTLP via collector.
+4) Monitoring backend stores spans and updates service edges and service registry metadata.
+5) Frontend queries monitoring APIs and renders charts and trace views.
+
+============================================================
+KEY SECURITY AND ISOLATION MODEL
+============================================================
+All monitoring APIs require these headers:
+- x-api-key: dev-monitor-key
+- x-tenant-id: default
+- x-project-id: demo
+
+How isolation works
+- Data is written with tenant_id and project_id.
+- Query endpoints filter by tenant_id and project_id.
+- Different teams/projects can be separated by sending different scope headers.
+
+============================================================
+API ENDPOINTS
+============================================================
+Backend health
+- GET /health
+
+Ingestion endpoints
+- POST /ingest/span
+  Custom JSON span ingestion (used by demo services).
+- POST /ingest/otlp/v1/traces
+  OTLP protobuf trace ingestion (language-agnostic path).
+
+Query endpoints
+- GET /api/traces?limit=20
+- GET /api/traces/{trace_id}
+- GET /api/service-map?minutes=60
+- GET /api/metrics/latency?minutes=60
+- GET /api/metrics/errors?minutes=60
+- GET /api/services
+
+============================================================
+CRITERIA TO MONITOR OTHER MICROSERVICES
+============================================================
+Your tool can monitor any microservice if one of these criteria is met:
+
+Option A: OTLP (recommended for language-agnostic monitoring)
+1) Service emits OTLP traces (protobuf) to collector.
+2) Collector forwards to /ingest/otlp/v1/traces.
+3) Requests include required auth/scope headers.
+4) Service includes standard resource attributes if possible:
+   - service.name
+   - deployment.environment
+   - service.version
+   - service.team (or team)
+
+Option B: Custom JSON span ingestion
+1) Service sends POST /ingest/span payload with:
+   - trace_id, span_id, service_name, path, method, status_code, duration_ms, started_at
+2) Optional but recommended:
+   - upstream_service, is_error, error_message
+   - environment, service_version, team
+3) Requests include auth/scope headers.
+
+Integration requirements for any service
+- Must include x-api-key
+- Must include tenant and project scope (x-tenant-id, x-project-id)
+- Must provide stable service_name
+- Should propagate trace_id across service-to-service calls
+
+============================================================
+HOW TO RUN THE PROJECT
+============================================================
+A) Local no-Docker mode (works on restricted machines)
+
+1) Install prerequisites
+- Python 3.11+
+- Node.js 20+
+
+2) Setup dependencies
+Command:
+  powershell -ExecutionPolicy Bypass -File .\scripts\setup-local.ps1
+
+3) Start stack in background
+Command:
+  powershell -ExecutionPolicy Bypass -File .\scripts\run-local-bg.ps1
+
+4) Open dashboard
+- http://localhost:5173
+
+5) Generate traffic
+- http://127.0.0.1:8001/checkout?item_id=book-1&quantity=1
+- http://127.0.0.1:8001/checkout?item_id=book-2&quantity=2
+- http://127.0.0.1:8001/checkout?item_id=book-3&quantity=1&fail_payments=true
+
+6) Stop stack
+Command:
+  powershell -ExecutionPolicy Bypass -File .\scripts\stop-local-bg.ps1
+
+
+B) Docker mode (normal machines with WSL2 enabled)
+
+Prerequisite
+- Docker Desktop + WSL2 working
+
+Commands
+1) docker compose up --build
+2) Open http://localhost:5173
+3) Generate same traffic as above
+
+If Docker fails on corporate machine
+- Use local no-Docker mode above.
+
+============================================================
+TEST COMMANDS (SMOKE CHECK)
+============================================================
+PowerShell example headers:
+$h = @{
+  "x-api-key" = "dev-monitor-key"
+  "x-tenant-id" = "default"
+  "x-project-id" = "demo"
+}
+
+Check APIs:
+Invoke-WebRequest -Headers $h http://127.0.0.1:8000/api/traces?limit=5
+Invoke-WebRequest -Headers $h http://127.0.0.1:8000/api/service-map?minutes=60
+Invoke-WebRequest -Headers $h http://127.0.0.1:8000/api/metrics/latency?minutes=60
+Invoke-WebRequest -Headers $h http://127.0.0.1:8000/api/metrics/errors?minutes=60
+Invoke-WebRequest -Headers $h http://127.0.0.1:8000/api/services
+
+============================================================
+CURRENT LIMITS AND PRACTICAL NOTES
+============================================================
+1) This is an MVP+ architecture; suitable for interview demos and extension.
+2) For large production scale, next upgrades would include:
+   - retention and partitioning strategy
+   - robust async pipelines (Kafka/RabbitMQ workers)
+   - stronger RBAC and secret management
+   - advanced alerting and anomaly detection
+3) On your current machine, Docker mode may be blocked by WSL policy (Forbidden 403), so local mode is the reliable path.
+
+============================================================
+FINAL STATUS
+============================================================
+This project is complete and usable:
+- End-to-end data flow works
+- Dashboard is populated by live traces/metrics
+- Multi-tenant/project headers are enforced
+- Service metadata is tracked
+- OTLP endpoint exists for language-agnostic ingestion

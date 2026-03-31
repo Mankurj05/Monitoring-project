@@ -1,0 +1,135 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: monitoring-postgres
+    environment:
+      POSTGRES_DB: monitoring
+      POSTGRES_USER: monitoring
+      POSTGRES_PASSWORD: monitoring
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U monitoring -d monitoring"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.101.0
+    container_name: monitoring-otel-collector
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes:
+      - ./otel-collector/config.yaml:/etc/otelcol/config.yaml
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+
+  monitoring-backend:
+    build:
+      context: ./monitoring_backend
+    container_name: monitoring-backend
+    environment:
+      DATABASE_URL: postgresql+psycopg2://monitoring:monitoring@postgres:5432/monitoring
+      API_PORT: 8000
+      MONITORING_API_KEY: dev-monitor-key
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+
+  gateway:
+    build:
+      context: ./services/gateway
+    container_name: service-gateway
+    environment:
+      SERVICE_NAME: gateway
+      API_PORT: 8001
+      DOWNSTREAM_ORDERS_URL: http://orders:8002/orders
+      DOWNSTREAM_PAYMENTS_URL: http://payments:8003/payments
+      MONITORING_INGEST_URL: http://monitoring-backend:8000/ingest/span
+      MONITORING_API_KEY: dev-monitor-key
+      TENANT_ID: default
+      PROJECT_ID: demo
+      SERVICE_ENVIRONMENT: docker
+      SERVICE_VERSION: 0.2.0
+      SERVICE_TEAM: platform
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+      OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
+      OTEL_SERVICE_NAME: gateway
+    depends_on:
+      - monitoring-backend
+      - otel-collector
+      - orders
+      - payments
+    ports:
+      - "8001:8001"
+
+  orders:
+    build:
+      context: ./services/orders
+    container_name: service-orders
+    environment:
+      SERVICE_NAME: orders
+      API_PORT: 8002
+      DOWNSTREAM_PAYMENTS_URL: http://payments:8003/payments
+      MONITORING_INGEST_URL: http://monitoring-backend:8000/ingest/span
+      MONITORING_API_KEY: dev-monitor-key
+      TENANT_ID: default
+      PROJECT_ID: demo
+      SERVICE_ENVIRONMENT: docker
+      SERVICE_VERSION: 0.2.0
+      SERVICE_TEAM: platform
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+      OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
+      OTEL_SERVICE_NAME: orders
+    depends_on:
+      - monitoring-backend
+      - otel-collector
+      - payments
+    ports:
+      - "8002:8002"
+
+  payments:
+    build:
+      context: ./services/payments
+    container_name: service-payments
+    environment:
+      SERVICE_NAME: payments
+      API_PORT: 8003
+      MONITORING_INGEST_URL: http://monitoring-backend:8000/ingest/span
+      MONITORING_API_KEY: dev-monitor-key
+      TENANT_ID: default
+      PROJECT_ID: demo
+      SERVICE_ENVIRONMENT: docker
+      SERVICE_VERSION: 0.2.0
+      SERVICE_TEAM: platform
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+      OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
+      OTEL_SERVICE_NAME: payments
+    depends_on:
+      - monitoring-backend
+      - otel-collector
+    ports:
+      - "8003:8003"
+
+  frontend:
+    build:
+      context: ./frontend
+    container_name: monitoring-frontend
+    environment:
+      VITE_API_BASE_URL: http://localhost:8000
+      VITE_MONITORING_API_KEY: dev-monitor-key
+      VITE_TENANT_ID: default
+      VITE_PROJECT_ID: demo
+    depends_on:
+      - monitoring-backend
+    ports:
+      - "5173:5173"
+
+volumes:
+  postgres_data:
